@@ -1,4 +1,4 @@
-module Main exposing (main)
+port module Main exposing (main)
 
 import Browser
 import Dict exposing (Dict)
@@ -7,6 +7,7 @@ import Html.Attributes exposing (class, selected, type_, value)
 import Html.Events exposing (onInput, onSubmit)
 import Http
 import Json.Decode
+import Json.Encode
 
 
 apiUrl : String
@@ -63,12 +64,21 @@ type alias Model =
     }
 
 
-init : () -> ( Model, Cmd Msg )
-init _ =
+init : Json.Encode.Value -> ( Model, Cmd Msg )
+init flags =
+    let
+        currencies =
+            case Json.Decode.decodeValue (Json.Decode.list currencyRateDecoder) flags of
+                Ok decodedCurrencies ->
+                    Success decodedCurrencies
+
+                _ ->
+                    Loading
+    in
     ( { from = "BRL"
       , to = "EUR"
       , amount = 1
-      , currencies = Loading
+      , currencies = currencies
       }
     , getCurrencyRates
     )
@@ -101,7 +111,7 @@ update msg model =
         GotCurrencyRates response ->
             case response of
                 Ok data ->
-                    ( { model | currencies = Success data }, Cmd.none )
+                    ( { model | currencies = Success data }, saveCurrencies data )
 
                 Err _ ->
                     ( { model | currencies = Error "Erro ao carregar as moedas" }, Cmd.none )
@@ -212,7 +222,10 @@ subscriptions model =
     Sub.none
 
 
-main : Program () Model Msg
+port saveCurrencies : List CurrencyRate -> Cmd msg
+
+
+main : Program Json.Encode.Value Model Msg
 main =
     Browser.element
         { init = init
