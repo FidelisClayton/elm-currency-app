@@ -1,13 +1,16 @@
 port module Main exposing (main)
 
 import Browser
+import Browser.Navigation as Nav
 import Dict exposing (Dict)
 import Html exposing (..)
-import Html.Attributes exposing (class, selected, type_, value)
-import Html.Events exposing (onInput, onSubmit)
+import Html.Attributes exposing (class, href, selected, type_, value)
+import Html.Events exposing (onInput)
 import Http
 import Json.Decode
 import Json.Encode
+import Route
+import Url
 
 
 apiUrl : String
@@ -61,11 +64,13 @@ type alias Model =
     , to : String
     , amount : Float
     , currencies : HttpData String (List CurrencyRate)
+    , key : Nav.Key
+    , url : Url.Url
     }
 
 
-init : Json.Encode.Value -> ( Model, Cmd Msg )
-init flags =
+init : Json.Encode.Value -> Url.Url -> Nav.Key -> ( Model, Cmd Msg )
+init flags url key =
     let
         currencies =
             case Json.Decode.decodeValue (Json.Decode.list currencyRateDecoder) flags of
@@ -79,6 +84,8 @@ init flags =
       , to = "EUR"
       , amount = 1
       , currencies = currencies
+      , key = key
+      , url = url
       }
     , getCurrencyRates
     )
@@ -89,11 +96,24 @@ type Msg
     | ChangeDestinyCurrency String
     | ChangeAmount String
     | GotCurrencyRates (Result Http.Error (List CurrencyRate))
+    | LinkClicked Browser.UrlRequest
+    | UrlChanged Url.Url
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
+        LinkClicked urlRequest ->
+            case urlRequest of
+                Browser.Internal url ->
+                    ( model, Nav.pushUrl model.key (Url.toString url) )
+
+                Browser.External href ->
+                    ( model, Nav.load href )
+
+        UrlChanged url ->
+            ( { model | url = url }, Cmd.none )
+
         ChangeOriginCurrency currencyCode ->
             ( { model | from = currencyCode }, Cmd.none )
 
@@ -153,60 +173,103 @@ getCurrencyValue currencyCode currencyRate =
     Maybe.withDefault 0 maybeValue
 
 
-view : Model -> Html Msg
-view model =
-    div [ class "flex justify-center py-10" ]
-        [ div [ class "w-full max-w-xs" ]
-            [ h1 [ class "text-center text-2xl mb-6" ] [ text "Conversor de Moedas" ]
-            , form [ class "bg-white shadow-md rounded px-8 pt-6 pb-8 mb-4" ]
-                (case model.currencies of
-                    Success currencies ->
-                        let
-                            result =
-                                convertCurrency model.amount model.from model.to currencies
-                        in
-                        [ div [ class "mb-4" ]
-                            [ label [ class "block text-gray-700 text-sm font-bold mb-2" ] [ text "Moeda de origem" ]
-                            , div [ class "relative" ]
-                                [ select
-                                    [ class selectClasses, value model.from, onInput ChangeOriginCurrency ]
-                                    [ option [ value "BRL", selected (model.from == "BRL") ] [ text "Real" ]
-                                    , option [ value "USD", selected (model.from == "USD") ] [ text "D�lar americano" ]
-                                    , option [ value "EUR", selected (model.from == "EUR") ] [ text "Euro" ]
+viewHome : Model -> Browser.Document Msg
+viewHome model =
+    { title = "Conversor de moedas"
+    , body =
+        [ div [ class "flex justify-center py-10" ]
+            [ div [ class "w-full max-w-xs" ]
+                [ h1 [ class "text-center text-2xl mb-6" ] [ text "Conversor de Moedas" ]
+                , form [ class "bg-white shadow-md rounded px-8 pt-6 pb-8 mb-4" ]
+                    (case model.currencies of
+                        Success currencies ->
+                            let
+                                result =
+                                    convertCurrency model.amount model.from model.to currencies
+                            in
+                            [ div [ class "mb-4" ]
+                                [ label [ class "block text-gray-700 text-sm font-bold mb-2" ] [ text "Moeda de origem" ]
+                                , div [ class "relative" ]
+                                    [ select
+                                        [ class selectClasses, value model.from, onInput ChangeOriginCurrency ]
+                                        [ option [ value "BRL", selected (model.from == "BRL") ] [ text "Real" ]
+                                        , option [ value "USD", selected (model.from == "USD") ] [ text "Dólar americano" ]
+                                        , option [ value "EUR", selected (model.from == "EUR") ] [ text "Euro" ]
+                                        ]
                                     ]
                                 ]
-                            ]
-                        , div [ class "mb-4" ]
-                            [ label [ class "block text-gray-700 text-sm font-bold mb-2" ]
-                                [ text "Moeda de destino" ]
-                            , div [ class "relative" ]
-                                [ select
-                                    [ class selectClasses, value model.to, onInput ChangeDestinyCurrency ]
-                                    [ option [ value "USD", selected (model.to == "USD") ] [ text "D�lar americano" ]
-                                    , option [ value "BRL", selected (model.to == "BRL") ] [ text "Real" ]
-                                    , option [ value "EUR", selected (model.to == "EUR") ] [ text "Euro" ]
+                            , div [ class "mb-4" ]
+                                [ label [ class "block text-gray-700 text-sm font-bold mb-2" ]
+                                    [ text "Moeda de destino" ]
+                                , div [ class "relative" ]
+                                    [ select
+                                        [ class selectClasses, value model.to, onInput ChangeDestinyCurrency ]
+                                        [ option [ value "USD", selected (model.to == "USD") ] [ text "Dólar americano" ]
+                                        , option [ value "BRL", selected (model.to == "BRL") ] [ text "Real" ]
+                                        , option [ value "EUR", selected (model.to == "EUR") ] [ text "Euro" ]
+                                        ]
                                     ]
                                 ]
+                            , div [ class "mb-6" ]
+                                [ label [ class "block text-gray-700 text-sm font-bold mb-2" ]
+                                    [ text "Quantidade" ]
+                                , input [ type_ "number", onInput ChangeAmount, value (String.fromFloat model.amount), class "shadow appearence-none border rounded w-full py-2 px-3 text-gray" ] []
+                                ]
+                            , div [ class "flex w-full" ]
+                                [ button [ class "bg-blue-500 w-full hover:bg-blue-700 text-white font-bold py-2 px-4" ] [ text "Converter" ] ]
+                            , div [ class "flex w-full text-center mt-5 text-gray-700 text-sm" ]
+                                [ text ("Convertendo " ++ String.fromFloat model.amount ++ " " ++ model.from ++ " para " ++ model.to ++ " totalizando " ++ String.fromFloat result ++ " " ++ model.to) ]
                             ]
-                        , div [ class "mb-6" ]
-                            [ label [ class "block text-gray-700 text-sm font-bold mb-2" ]
-                                [ text "Quantidade" ]
-                            , input [ type_ "number", onInput ChangeAmount, value (String.fromFloat model.amount), class "shadow appearence-none border rounded w-full py-2 px-3 text-gray" ] []
-                            ]
-                        , div [ class "flex w-full" ]
-                            [ button [ class "bg-blue-500 w-full hover:bg-blue-700 text-white font-bold py-2 px-4" ] [ text "Converter" ] ]
-                        , div [ class "flex w-full text-center mt-5 text-gray-700 text-sm" ]
-                            [ text ("Convertendo " ++ String.fromFloat model.amount ++ " " ++ model.from ++ " para " ++ model.to ++ " totalizando " ++ String.fromFloat result ++ " " ++ model.to) ]
-                        ]
 
-                    Loading ->
-                        [ div [ class "text-center" ] [ text "Carregando..." ] ]
+                        Loading ->
+                            [ div [ class "text-center" ] [ text "Carregando..." ] ]
 
-                    Error error ->
-                        [ div [ class "text-center text-red-700" ] [ text error ] ]
-                )
+                        Error error ->
+                            [ div [ class "text-center text-red-700" ] [ text error ] ]
+                    )
+                , a [ href "/", class "mx-2" ] [ text "Conversor" ]
+                , a [ href "/history/from/EUR/to/BRL", class "mx-2" ] [ text "Histórico de BRL x EUR" ]
+                ]
             ]
         ]
+    }
+
+
+viewHistory : String -> String -> Model -> Browser.Document Msg
+viewHistory from to model =
+    { title = "Histórico"
+    , body =
+        [ text <| "Histórico de " ++ from ++ " x " ++ to
+        , div [ class "mt-2" ]
+            [ a [ href "/" ] [ text "Conversor" ]
+            ]
+        ]
+    }
+
+
+viewNotFound : Model -> Browser.Document Msg
+viewNotFound model =
+    { title = "404"
+    , body =
+        [ text "Página não encontrada"
+        , div [ class "mt-2" ]
+            [ a [ href "/" ] [ text "Conversor" ]
+            ]
+        ]
+    }
+
+
+view : Model -> Browser.Document Msg
+view model =
+    case Route.fromUrl model.url of
+        Route.NotFound ->
+            viewNotFound model
+
+        Route.History from to ->
+            viewHistory from to model
+
+        Route.Home ->
+            viewHome model
 
 
 getCurrencyRates : Cmd Msg
@@ -227,9 +290,11 @@ port saveCurrencies : List CurrencyRate -> Cmd msg
 
 main : Program Json.Encode.Value Model Msg
 main =
-    Browser.element
+    Browser.application
         { init = init
         , view = view
         , update = update
         , subscriptions = subscriptions
+        , onUrlChange = UrlChanged
+        , onUrlRequest = LinkClicked
         }
