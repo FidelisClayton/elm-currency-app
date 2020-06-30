@@ -2,14 +2,17 @@ port module Main exposing (main)
 
 import Browser
 import Browser.Navigation as Nav
+import DateFormat
 import Dict exposing (Dict)
 import Html exposing (..)
 import Html.Attributes exposing (class, href, selected, type_, value)
 import Html.Events exposing (onInput)
 import Http
+import Iso8601
 import Json.Decode
 import Json.Encode
 import Route
+import Time exposing (Posix)
 import Url
 
 
@@ -37,6 +40,12 @@ type alias CurrencyRate =
     }
 
 
+type alias HistoryItem =
+    { date : Posix
+    , rate : Float
+    }
+
+
 conversionRateDecoder : Json.Decode.Decoder ConversionRate
 conversionRateDecoder =
     Json.Decode.map3 ConversionRate
@@ -53,6 +62,13 @@ currencyRateDecoder =
         (Json.Decode.field "rates" conversionRateDecoder)
 
 
+historyItemDecoder : Json.Decode.Decoder HistoryItem
+historyItemDecoder =
+    Json.Decode.map2 HistoryItem
+        (Json.Decode.field "date" Iso8601.decoder)
+        (Json.Decode.field "rate" Json.Decode.float)
+
+
 type HttpData error data
     = Loading
     | Success data
@@ -66,6 +82,7 @@ type alias Model =
     , currencies : HttpData String (List CurrencyRate)
     , key : Nav.Key
     , url : Url.Url
+    , history : HttpData String (List HistoryItem)
     }
 
 
@@ -79,6 +96,17 @@ init flags url key =
 
                 _ ->
                     Loading
+
+        cmd =
+            case Route.fromUrl url of
+                Route.History from to ->
+                    getHistory from to
+
+                Route.Home ->
+                    getCurrencyRates
+
+                _ ->
+                    Cmd.none
     in
     ( { from = "BRL"
       , to = "EUR"
@@ -86,8 +114,9 @@ init flags url key =
       , currencies = currencies
       , key = key
       , url = url
+      , history = Loading
       }
-    , getCurrencyRates
+    , cmd
     )
 
 
@@ -98,6 +127,7 @@ type Msg
     | GotCurrencyRates (Result Http.Error (List CurrencyRate))
     | LinkClicked Browser.UrlRequest
     | UrlChanged Url.Url
+    | GotHistory (Result Http.Error (List HistoryItem))
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -112,7 +142,16 @@ update msg model =
                     ( model, Nav.load href )
 
         UrlChanged url ->
-            ( { model | url = url }, Cmd.none )
+            let
+                cmd =
+                    case Route.fromUrl url of
+                        Route.History from to ->
+                            getHistory from to
+
+                        _ ->
+                            Cmd.none
+            in
+            ( { model | url = url }, cmd )
 
         ChangeOriginCurrency currencyCode ->
             ( { model | from = currencyCode }, Cmd.none )
@@ -135,6 +174,14 @@ update msg model =
 
                 Err _ ->
                     ( { model | currencies = Error "Erro ao carregar as moedas" }, Cmd.none )
+
+        GotHistory response ->
+            case response of
+                Ok data ->
+                    ( { model | history = Success data }, Cmd.none )
+
+                Err _ ->
+                    ( { model | history = Error "Erro ao carregar o histórico" }, Cmd.none )
 
 
 convertCurrency : Float -> String -> String -> List CurrencyRate -> Float
@@ -235,13 +282,47 @@ viewHome model =
     }
 
 
+viewHistoryRow : HistoryItem -> Html Msg
+viewHistoryRow historyItem =
+    tr []
+        [ td [ class "text-left" ] [ text <| formatPosix historyItem.date ]
+        , td [ class "text-left" ] [ text <| String.fromFloat historyItem.rate ]
+        ]
+
+
+viewHistoryTable : List HistoryItem -> Html Msg
+viewHistoryTable history =
+    table [ class "table-fixed w-full" ]
+        [ thead []
+            [ tr []
+                [ th [ class "w-3/4 text-left" ] [ text "Data" ]
+                , th [ class "w-1/4 text-left" ] [ text "Valor" ]
+                ]
+            ]
+        , tbody []
+            (List.take 30 history |> List.map viewHistoryRow)
+        ]
+
+
 viewHistory : String -> String -> Model -> Browser.Document Msg
 viewHistory from to model =
     { title = "Histórico"
     , body =
-        [ text <| "Histórico de " ++ from ++ " x " ++ to
-        , div [ class "mt-2" ]
-            [ a [ href "/" ] [ text "Conversor" ]
+        [ div [ class "flex justify-center py-10" ]
+            [ div [ class "w-full max-w-sm" ]
+                [ h1 [ class "text-center text-2xl mb-6" ] [ text <| "Histórico " ++ from ++ " x " ++ to ]
+                , div [ class "bg-white shadow-md rounded px-8 pt-6 pb-8 mb-4" ]
+                    [ case model.history of
+                        Loading ->
+                            text "Carregando"
+
+                        Success history ->
+                            viewHistoryTable history
+
+                        Error error ->
+                            text error
+                    ]
+                ]
             ]
         ]
     }
@@ -278,6 +359,26 @@ getCurrencyRates =
         { url = apiUrl ++ "/v1/latest"
         , expect = Http.expectJson GotCurrencyRates (Json.Decode.list currencyRateDecoder)
         }
+
+
+getHistory : String -> String -> Cmd Msg
+getHistory from to =
+    Http.get
+        { url = apiUrl ++ "/v1/history?from=" ++ from ++ "&to=" ++ to
+        , expect = Http.expectJson GotHistory (Json.Decode.list historyItemDecoder)
+        }
+
+
+formatPosix : Posix -> String
+formatPosix =
+    DateFormat.format
+        [ DateFormat.dayOfMonthFixed
+        , DateFormat.text "/"
+        , DateFormat.monthFixed
+        , DateFormat.text "/"
+        , DateFormat.yearNumber
+        ]
+        Time.utc
 
 
 subscriptions : Model -> Sub Msg
